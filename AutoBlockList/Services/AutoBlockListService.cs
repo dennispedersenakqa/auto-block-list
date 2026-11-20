@@ -327,10 +327,46 @@ namespace AutoBlockList.Services
             if (value == null)
                 return string.Empty;
 
-            var ncValues = JsonConvert.DeserializeObject<IEnumerable<Dictionary<string, string>>>(value.ToString());
+            var ncValues = ParseNestedContent(value.ToString());
             var contentData = ConvertNCDataToBLData(ncValues);
 
             return contentData == null ? string.Empty : SerializeBlockList(contentData);
+        }
+
+        // Nested Content item values can be stored either as strings or as raw JSON
+        // (arrays/objects - e.g. nested NC inside NC, pickers). Deserializing straight into
+        // Dictionary<string, string> throws on the raw JSON ones, which made the whole
+        // property fail and stay Nested Content. Normalise every value to a string instead.
+        private static IEnumerable<Dictionary<string, string>>? ParseNestedContent(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+                return null;
+
+            // DateParseHandling.None: keep ISO date strings as strings. Otherwise Newtonsoft turns
+            // them into Date tokens and they'd be written back quoted ("\"2026-03-18T00:00:00\"").
+            var items = JsonConvert.DeserializeObject<List<Dictionary<string, Newtonsoft.Json.Linq.JToken>>>(
+                json, new JsonSerializerSettings { DateParseHandling = DateParseHandling.None });
+
+            if (items == null)
+                return null;
+
+            var result = new List<Dictionary<string, string>>();
+            foreach (var item in items)
+            {
+                var normalised = new Dictionary<string, string>();
+                foreach (var pair in item)
+                {
+                    var token = pair.Value;
+                    normalised[pair.Key] = token == null || token.Type == Newtonsoft.Json.Linq.JTokenType.Null
+                        ? null!
+                        : token.Type == Newtonsoft.Json.Linq.JTokenType.String
+                            ? (string)token!
+                            : token.ToString(Formatting.None);
+                }
+                result.Add(normalised);
+            }
+
+            return result;
         }
 
         private static string SerializeBlockList(List<Dictionary<string, string>> contentData)
@@ -382,7 +418,7 @@ namespace AutoBlockList.Services
                         continue;
                     }
 
-                    var nestedNCValues = JsonConvert.DeserializeObject<IEnumerable<Dictionary<string, string>>>(value.Value);
+                    var nestedNCValues = ParseNestedContent(value.Value);
                     var nestedContentData = ConvertNCDataToBLData(nestedNCValues);
 
                     if (nestedContentData == null)
@@ -428,37 +464,62 @@ namespace AutoBlockList.Services
         public IEnumerable<IDataType> GetDataTypesInContentType(IContentType contentType)
         {
             var dataTypes = new List<IDataType>();
-            var propertyTypes = GetPropertyTypes(contentType);
+            CollectDataTypesInContentType(contentType, dataTypes, new HashSet<int>());
+            return dataTypes.DistinctBy(x => x.Id);
+        }
 
+        // Nested Content element types can reference each other (or themselves), e.g. a
+        // module that contains modules. Track visited content types so a cycle doesn't
+        // recurse forever (StackOverflowException).
+        private void CollectDataTypesInContentType(IContentType contentType, List<IDataType> dataTypes, HashSet<int> visitedContentTypeIds)
+        {
+            if (!visitedContentTypeIds.Add(contentType.Id))
+                return;
+
+            var propertyTypes = GetPropertyTypes(contentType);
 
             foreach (var propertyType in propertyTypes)
             {
                 var dataType = _dataTypeService.GetDataType(propertyType.DataTypeId);
+                if (dataType == null)
+                    continue;
 
-                if (dataType != null)
+                dataTypes.Add(dataType);
+
+                if (dataType.Configuration is not NestedContentConfiguration ncConfig || ncConfig.ContentTypes == null)
+                    continue;
+
+                foreach (var ncContentType in ncConfig.ContentTypes)
                 {
-                    dataTypes.Add(dataType);
-                    var ncConfig = dataType.Configuration as NestedContentConfiguration;
-                    foreach (var ncContentType in ncConfig.ContentTypes)
-                    {
-                        var nestedContentType = _contentTypeService.Get(ncContentType.Alias);
-                        if (nestedContentType != null)
-                            dataTypes.AddRange(GetDataTypesInContentType(nestedContentType));   
-                    }
+                    var nestedContentType = _contentTypeService.Get(ncContentType.Alias);
+                    if (nestedContentType != null)
+                        CollectDataTypesInContentType(nestedContentType, dataTypes, visitedContentTypeIds);
                 }
             }
-
-            return dataTypes.DistinctBy(x => x.Id);
         }
 
 		public IEnumerable<int> GetComposedOf(IEnumerable<int> ids)
 		{
-			var contentTypes = new List<int>();
+			// IContentTypeService.GetComposedOf only returns DIRECT consumers. Walk the whole
+			// chain so types composed of a composition that is itself composed of an NC
+			// composition (or inherited several levels deep) are included too.
+			var seen = new HashSet<int>(ids);
+			var result = new List<int>();
+			var queue = new Queue<int>(ids);
 
-			foreach (int id in ids)
-				contentTypes.AddRange(_contentTypeService.GetComposedOf(id).Select(x => x.Id));
+			while (queue.Count > 0)
+			{
+				foreach (var composedId in _contentTypeService.GetComposedOf(queue.Dequeue()).Select(x => x.Id))
+				{
+					if (seen.Add(composedId))
+					{
+						result.Add(composedId);
+						queue.Enqueue(composedId);
+					}
+				}
+			}
 
-			return contentTypes;
+			return result;
 		}
 
 		public IEnumerable<IPropertyType> GetPropertyTypes(IContentType contentType)
@@ -470,6 +531,21 @@ namespace AutoBlockList.Services
                 propertyTypes.AddRange(contentType.CompositionPropertyTypes.Where(x => x.PropertyEditorAlias == PropertyEditors.Aliases.NestedContent));
 
             return propertyTypes.DistinctBy(x => x.Id);
+        }
+
+        public IEnumerable<IContentType> GetContentTypesFromDataType(IDataType dataType)
+        {
+            var contentTypes = new List<IContentType>();
+
+            foreach (var entityType in _dataTypeService.GetReferences(dataType.Id)
+                         .Where(x => x.Key.EntityType == UmbracoObjectTypes.DocumentType.GetUdiType()))
+            {
+                var contentType = _contentTypeService.Get(((GuidUdi)entityType.Key).Guid);
+                if (contentType != null && contentTypes.All(x => x.Id != contentType.Id))
+                    contentTypes.Add(contentType);
+            }
+
+            return contentTypes;
         }
 
         public IEnumerable<IContentType> GetElementContentTypesFromDataType(IDataType dataType)

@@ -1,0 +1,43 @@
+<div>
+    <p ng-if="model.report.dryRun">
+        <strong>Preview - nothing has been changed yet.</strong>
+        Review the list below. <strong>Take a database backup first</strong>: the Nested Content properties and their data are deleted permanently.
+    </p>
+    <p ng-if="!model.report.dryRun && !model.report.errors.length">
+        <strong>Done.</strong> Rebuild the models (ModelsBuilder) - properties like <code>Modules</code> are now Block List.
+    </p>
+
+    <div ng-if="model.report.errors.length" class="alert alert-error">
+        <div ng-repeat="e in model.report.errors">{{e}}</div>
+    </div>
+
+    <h5>Properties ({{model.report.propertyRenames.length}})</h5>
+    <ul>
+        <li ng-repeat="x in model.report.propertyRenames">{{x}}</li>
+        <li ng-if="!model.report.propertyRenames.length"><em>None</em></li>
+    </ul>
+
+    <h5>Content values with nested keys renamed: {{model.report.contentRowsUpdated}}</h5>
+
+    <h5>Nested Content data types deleted ({{model.report.dataTypesDeleted.length}})</h5>
+    <ul>
+        <li ng-repeat="x in model.report.dataTypesDeleted">{{x}}</li>
+        <li ng-if="!model.report.dataTypesDeleted.length"><em>None</em></li>
+    </ul>
+
+    <h5>Block List data types renamed ({{model.report.dataTypesRenamed.length}})</h5>
+    <ul>
+        <li ng-repeat="x in model.report.dataTypesRenamed">{{x}}</li>
+        <li ng-if="!model.report.dataTypesRenamed.length"><em>None</em></li>
+    </ul>
+
+    <div ng-if="model.report.dataTypesKept.length">
+        <h5>Nested Content data types kept ({{model.report.dataTypesKept.length}})</h5>
+        <ul><li ng-repeat="x in model.report.dataTypesKept">{{x}}</li></ul>
+    </div>
+
+    <div ng-if="model.report.skipped.length">
+        <h5>Skipped ({{model.report.skipped.length}})</h5>
+        <ul><li ng-repeat="x in model.report.skipped">{{x}}</li></ul>
+    </div>
+</div>

@@ -219,6 +219,19 @@
                     </umb-box>
 
 
+                    <umb-box>
+                        <umb-box-header title="Finalize - Nested Content" description="Deletes converted Nested Content properties and renames their Block List properties to the original alias (e.g. modulesBL -> modules), including nested block data. Shows a preview first."></umb-box-header>
+                        <umb-box-content>
+                            <umb-button action="vm.finalizeNestedContent()"
+                                        type="button"
+                                        button-style="warning"
+                                        label="Finalize"
+                                        icon="icon-wand"
+                                        state="vm.finalizeButtonState">
+                            </umb-button>
+                        </umb-box-content>
+                    </umb-box>
+
                     <div class="flex flex-wrap autoBlockList-removal-boxes">
                         <div class="w-50">
                             <umb-box class="mr3"> 

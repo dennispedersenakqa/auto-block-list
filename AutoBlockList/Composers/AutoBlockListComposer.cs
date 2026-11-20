@@ -27,7 +27,8 @@ namespace AutoBlockList.Composers
 							.AddScoped<IAutoBlockListContext, AutoBlockListContext>();
 
 			builder.Services.AddScoped<IAutoBlockListService, AutoBlockListService>()
-                            .AddScoped<IAutoBlockListMacroService, AutoBlockListMacroService>();
+                            .AddScoped<IAutoBlockListMacroService, AutoBlockListMacroService>()
+                            .AddScoped<INestedContentFinalizeService, NestedContentFinalizeService>();
 
             builder.Services.AddOptions<AutoBlockListSettings>()
                 .Bind(builder.Config.GetSection(AutoBlockListSettings.AutoBlockList));

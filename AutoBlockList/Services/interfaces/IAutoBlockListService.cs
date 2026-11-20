@@ -18,6 +18,7 @@ namespace AutoBlockList.Services.interfaces
         PropertyType? MapPropertyType(IPropertyType propertyType, IDataType ncDataType, IDataType blDataType);
         IEnumerable<CustomDisplayDataType> GetAllDataTypesWithAlias(string alias);
         IEnumerable<IContentType> GetElementContentTypesFromDataType(IDataType dataType);
+        IEnumerable<IContentType> GetContentTypesFromDataType(IDataType dataType);
         bool HasBLContent(IContent item);
         IEnumerable<IPropertyType> GetPropertyTypes(IContentType contentType);
         IEnumerable<int> GetComposedOf(IEnumerable<int> ids);

@@ -1,4 +1,4 @@
-﻿using NPoco;
+using NPoco;
 using Umbraco.Cms.Core;
 using AutoBlockList.Dtos;
 using AutoBlockList.Hubs;
@@ -11,7 +11,9 @@ using Umbraco.Cms.Core.Logging;
 using Umbraco.Cms.Core.Services;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using AutoBlockList.Services;
 using AutoBlockList.Services.interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using Umbraco.Cms.Web.Common.Attributes;
 using static Umbraco.Cms.Core.Constants;
 using Microsoft.AspNetCore.Authorization;
@@ -66,6 +68,9 @@ namespace AutoBlockList.Controllers
 			_autoBlockListHubClientFactory = autoBlockListHubClientFactory;
 		}
 
+		// Number of items per page in the dashboard lists. Override per request with ?pageSize=.
+		private const int DefaultPageSize = 100;
+
 		[HttpGet]
 		public IEnumerable<CustomContentTypeReferences> GetContentTypesByPropertyEditorAlias(string alias)
 		{
@@ -100,7 +105,7 @@ namespace AutoBlockList.Controllers
 
 		#region Macros
 		[HttpGet]
-		public PagedResult<DisplayAutoBlockListContent> GetAllContentWithTinyMce(int page)
+		public PagedResult<DisplayAutoBlockListContent> GetAllContentWithTinyMce(int page, int pageSize = DefaultPageSize)
 		{
 			var contentTypes = _runtimeCache.GetCacheItem(AutoBlockListConstants.TinyMCECacheKey, () =>
 			{
@@ -132,9 +137,9 @@ namespace AutoBlockList.Controllers
 
 			using (var scope = _scopeProvider.CreateScope())
 			{
-				Page<ContentWithMacroInfo> pagedResult = _runtimeCache.GetCacheItem(string.Format(AutoBlockListConstants.TinyMCECacheKey_Page, page), () =>
+				Page<ContentWithMacroInfo> pagedResult = _runtimeCache.GetCacheItem(string.Format(AutoBlockListConstants.TinyMCECacheKey_Page, page) + "_" + pageSize, () =>
 				{
-					var pagedResult = scope.Database.Page<ContentWithMacroInfo>(page, 15, AutoBlockListConstants.SQL_WITH_MACRO_INFO, new { propertyTypeIds = tinyMcePropertyTypeIds });
+					var pagedResult = scope.Database.Page<ContentWithMacroInfo>(page, pageSize, AutoBlockListConstants.SQL_WITH_MACRO_INFO, new { propertyTypeIds = tinyMcePropertyTypeIds });
 
 					return pagedResult.Items.Any() ? pagedResult : null;
 				});
@@ -376,7 +381,7 @@ namespace AutoBlockList.Controllers
 
 		#region NestedContent
 		[HttpGet]
-		public PagedResult<DisplayAutoBlockListContent> GetAllContentWithNC(int page)
+		public PagedResult<DisplayAutoBlockListContent> GetAllContentWithNC(int page, int pageSize = DefaultPageSize)
 		{
 			var contentTypes = _runtimeCache.GetCacheItem(AutoBlockListConstants.CacheKey, () =>
 			{
@@ -392,8 +397,8 @@ namespace AutoBlockList.Controllers
 			contentTypesIds.AddRange(_autoBlockListService.GetComposedOf(contentTypesIds));
 
 			var filter = new Query<IContent>(_scopeProvider.SqlContext).Where(x => !x.Trashed);
-			var items = _contentService.GetPagedOfTypes(contentTypesIds.ToArray(), page, 15, out long totalRecords, filter, null);
-			var result = new PagedResult<DisplayAutoBlockListContent>(totalRecords, page, 15);
+			var items = _contentService.GetPagedOfTypes(contentTypesIds.ToArray(), page, pageSize, out long totalRecords, filter, null);
+			var result = new PagedResult<DisplayAutoBlockListContent>(totalRecords, page, pageSize);
 			result.Items = items.Select(x => new DisplayAutoBlockListContent()
 			{
 				ContentType = x.ContentType,
@@ -445,29 +450,30 @@ namespace AutoBlockList.Controllers
 
 					foreach (var dataType in ncDataTypes)
 					{
-						var hasNcDataType = fullContentType.PropertyTypes.FirstOrDefault(x => x.DataTypeId == dataType.Id);
-						hasNcDataType = hasNcDataType == null ? fullContentType.CompositionPropertyTypes.FirstOrDefault(x => x.DataTypeId == dataType.Id) : hasNcDataType;
+						// Add the Block List property to EVERY content type that uses this NC data type -
+						// the selected document type, other document types, element types (e.g. a
+						// Row/Section module that itself contains "modules") and compositions. Previously
+						// element types were skipped whenever the selected document type also used the
+						// same data type, leaving Nested Content behind on those modules.
+						var targets = new List<IContentType>();
 
+						var hasNcDataType = fullContentType.PropertyTypes.FirstOrDefault(x => x.DataTypeId == dataType.Id)
+							?? fullContentType.CompositionPropertyTypes.FirstOrDefault(x => x.DataTypeId == dataType.Id);
 						if (hasNcDataType != null)
+							targets.Add(fullContentType);
+
+						targets.AddRange(_autoBlockListService.GetContentTypesFromDataType(dataType)
+							.Where(x => targets.All(t => t.Id != x.Id)));
+
+						foreach (var contentType in targets)
 						{
-							var convertReport = _autoBlockListService.AddDataTypeToContentType(fullContentType, dataType);
+							// Re-fetch: a previous Save may have changed it (e.g. a shared composition).
+							var target = _contentTypeService.Get(contentType.Id) ?? contentType;
+							var convertReport = _autoBlockListService.AddDataTypeToContentType(target, dataType);
 							if (convertReport.Status == AutoBlockListConstants.Status.Failed)
 							{
 								client.Done(index);
 								return ValidationProblem();
-							}
-						}
-						else
-						{
-							var contentTypes = _autoBlockListService.GetElementContentTypesFromDataType(dataType);
-							foreach (var contentType in contentTypes)
-							{
-								var convertReport = _autoBlockListService.AddDataTypeToContentType(contentType, dataType);
-								if (convertReport.Status == AutoBlockListConstants.Status.Failed)
-								{
-									client.Done(index);
-									return ValidationProblem();
-								}
 							}
 						}
 					}
@@ -530,6 +536,18 @@ namespace AutoBlockList.Controllers
 
 			_autoBlockListContext.ClearClient();
 			return Ok();
+		}
+
+		/// <summary>
+		/// Removes converted Nested Content properties and renames their Block List siblings
+		/// ("modulesBL" -> "modules"), including the keys inside stored block JSON.
+		/// dryRun=true (default) only reports what would change.
+		/// </summary>
+		[HttpPost]
+		public IActionResult FinalizeNC(bool dryRun = true)
+		{
+			var finalizeService = HttpContext.RequestServices.GetRequiredService<INestedContentFinalizeService>();
+			return Ok(finalizeService.Finalize(dryRun));
 		}
 		#endregion
 	}

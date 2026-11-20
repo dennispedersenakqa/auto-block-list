@@ -232,6 +232,56 @@ angular.module("umbraco").controller("autoBlockList.overview.controller", functi
         overlayService.confirm(confirmOptions);
     }
 
+    // Remove converted Nested Content properties and rename "xBL" -> "x".
+    // Always shows a dry-run preview first; nothing changes until "Finalize" is confirmed.
+    vm.finalizeNestedContent = function () {
+        var finalizeUrl = "/umbraco/backoffice/api/AutoBlockListApi/FinalizeNC?dryRun=";
+        var view = "/App_Plugins/AutoBlockList/components/overlays/finalizeNC.html";
+
+        vm.finalizeButtonState = "busy";
+        $http.post(finalizeUrl + "true").then(function (preview) {
+            vm.finalizeButtonState = "init";
+
+            overlayService.open({
+                view: view,
+                title: "Finalize - preview",
+                size: "medium",
+                report: preview.data,
+                submitButtonLabel: "Finalize",
+                submitButtonStyle: "danger",
+                closeButtonLabel: "Cancel",
+                disableSubmitButton: preview.data.errors.length > 0 || preview.data.propertyRenames.length === 0,
+                submit: function (model) {
+                    model.submitButtonState = "busy";
+                    $http.post(finalizeUrl + "false").then(function (result) {
+                        overlayService.close();
+                        overlayService.open({
+                            view: view,
+                            title: result.data.errors.length ? "Finalize failed" : "Finalize - done",
+                            size: "medium",
+                            report: result.data,
+                            hideSubmitButton: true,
+                            closeButtonLabel: "Close",
+                            close: function () {
+                                overlayService.close();
+                                $route.reload();
+                            }
+                        });
+                    }, function () {
+                        overlayService.close();
+                        notificationsService.error("Auto block list", "Finalize failed. Check the logs.");
+                    });
+                },
+                close: function () {
+                    overlayService.close();
+                }
+            });
+        }, function () {
+            vm.finalizeButtonState = "error";
+            notificationsService.error("Auto block list", "Failed to load the finalize preview. Check the logs.");
+        });
+    };
+
     vm.removeAllNestedContent = function () {
 
         var confirmOptions = {
